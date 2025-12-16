@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { Upload as UploadIcon, BookOpen, Layers, Lock, AlertTriangle, Server, Cloud, Info, CheckCircle, Image as ImageIcon, Download, Link as LinkIcon, Palette, Tag, Trash2 } from 'lucide-react';
+import { Upload as UploadIcon, BookOpen, Layers, Lock, AlertTriangle, Server, Cloud, Info, CheckCircle, Image as ImageIcon, Download, Link as LinkIcon, Palette, Tag, Trash2, FolderOpen, HelpCircle } from 'lucide-react';
 import { useStories } from '../context/StoryContext';
 import { useAuth } from '../context/AuthContext';
 import { Story, Chapter } from '../types';
@@ -13,7 +13,7 @@ const Upload: React.FC = () => {
   
   const [mode, setMode] = useState<'new' | 'update'>('new');
 
-  // Storage Settings: 'server' | 'drive' | 'canva' or '' if none allowed
+  // Storage Settings: 'server' | 'drive' | 'canva' | 'drive_folder'
   const [storageType, setStorageType] = useState<string>('server');
   
   // Google Apps Script URL (Updated)
@@ -29,14 +29,14 @@ const Upload: React.FC = () => {
   // Cover State
   const [coverFile, setCoverFile] = useState<File | null>(null);
   const [coverPreview, setCoverPreview] = useState<string>('');
-  const [canvaCoverUrl, setCanvaCoverUrl] = useState(''); // For Canva mode
+  const [canvaCoverUrl, setCanvaCoverUrl] = useState(''); // For Canva & Drive Link modes
   
   const [selectedStoryId, setSelectedStoryId] = useState('');
   const [storyStatus, setStoryStatus] = useState<Story['status']>('Đang tiến hành');
 
   // Chapter Content State
   const [chapterFiles, setChapterFiles] = useState<FileList | null>(null);
-  const [canvaChapterUrls, setCanvaChapterUrls] = useState(''); // For Canva mode (textarea)
+  const [canvaChapterUrls, setCanvaChapterUrls] = useState(''); // For Canva/Drive Link mode (textarea)
 
   const [chapterOrder, setChapterOrder] = useState<number>(1);
   const [chapterTitle, setChapterTitle] = useState('Chapter 1');
@@ -50,17 +50,12 @@ const Upload: React.FC = () => {
 
   // Effect to validate storageType when settings change
   useEffect(() => {
-      // Priority: Server -> Drive -> Canva
-      if (uploadSettings.allowServer) {
-          if (!storageType || (storageType !== 'server' && !uploadSettings.allowDrive && !uploadSettings.allowCanva)) {
-               setStorageType('server');
-          }
-      } else if (uploadSettings.allowDrive) {
-           if (storageType === 'server' || !storageType) setStorageType('drive');
-      } else if (uploadSettings.allowCanva) {
-           if (storageType === 'server' || storageType === 'drive' || !storageType) setStorageType('canva');
-      } else {
-           setStorageType(''); // No method allowed
+      // Default fallback logic
+      if (!storageType) {
+          if (uploadSettings.allowServer) setStorageType('server');
+          else if (uploadSettings.allowDrive) setStorageType('drive');
+          else if (uploadSettings.allowDriveFolder) setStorageType('drive_folder');
+          else if (uploadSettings.allowCanva) setStorageType('canva');
       }
   }, [uploadSettings, storageType]);
 
@@ -97,35 +92,38 @@ const Upload: React.FC = () => {
     }
   };
 
-  // Hàm xử lý chọn/bỏ chọn thể loại
   const toggleGenre = (genre: string) => {
     let currentGenres = genres.split(',').map(g => g.trim()).filter(g => g !== '');
-    
     if (currentGenres.includes(genre)) {
-        // Nếu đã có thì xóa đi
         currentGenres = currentGenres.filter(g => g !== genre);
     } else {
-        // Nếu chưa có thì thêm vào
         currentGenres.push(genre);
     }
     setGenres(currentGenres.join(', '));
   };
 
-  // Helper: Convert File to Base64
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.readAsDataURL(file);
         reader.onload = () => {
             const result = reader.result as string;
-            // Remove the "data:image/jpeg;base64," part
             resolve(result.split(',')[1]); 
         };
         reader.onerror = error => reject(error);
     });
   };
 
-  // Handler xóa truyện
+  // Helper: Convert Google Drive View Links to Direct Image Links
+  const convertDriveLink = (url: string) => {
+      const driveRegex = /drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/;
+      const match = url.match(driveRegex);
+      if (match && match[1]) {
+          return `https://lh3.googleusercontent.com/d/${match[1]}`;
+      }
+      return url;
+  };
+
   const handleDeleteStory = async () => {
       if (!selectedStoryId) {
           alert("Vui lòng chọn truyện cần xóa!");
@@ -135,7 +133,6 @@ const Upload: React.FC = () => {
       const storyToDelete = stories.find(s => s.id === selectedStoryId);
       if (!storyToDelete) return;
 
-      // KIỂM TRA QUYỀN: Chỉ chủ sở hữu (uploaderId hoặc translator) hoặc Admin mới được xóa
       const isOwner = user && (user.id === storyToDelete.uploaderId || user.name === storyToDelete.translator || user.role === 'admin');
 
       if (!isOwner) {
@@ -154,8 +151,8 @@ const Upload: React.FC = () => {
           if (success) {
               alert("Đã xóa truyện thành công!");
               await refreshStories();
-              setSelectedStoryId(''); // Reset selection
-              setMode('new'); // Switch back to new
+              setSelectedStoryId(''); 
+              setMode('new'); 
           } else {
               throw new Error("Không thể xóa truyện trên server.");
           }
@@ -176,18 +173,28 @@ const Upload: React.FC = () => {
       formData.append('file', file);
       formData.append('path', path);
 
-      const res = await fetch('/api.php', {
-          method: 'POST',
-          body: formData
-      });
-      
-      if (res.status === 404) throw new Error("Không tìm thấy file api.php trên server");
-      if (!res.ok) throw new Error("Lỗi Server: " + res.status);
-      
-      const data = await res.json();
-      if (!data.success) throw new Error(data.message);
-      
-      return data.url; 
+      try {
+          const res = await fetch('/api.php', {
+              method: 'POST',
+              body: formData
+          });
+          
+          if (res.status === 404) throw new Error("Không tìm thấy file api.php trên server. Hãy kiểm tra folder 'dist' đã có 'api.php' chưa.");
+          if (!res.ok) throw new Error("Lỗi Server: " + res.status + " " + res.statusText);
+          
+          const text = await res.text();
+          try {
+              const data = JSON.parse(text);
+              if (!data.success) throw new Error(data.message);
+              return data.url; 
+          } catch (jsonErr) {
+              // If response is not JSON, it might be an InfinityFree HTML error page
+              console.error("Server Response:", text);
+              throw new Error("Server trả về lỗi không xác định (HTML). Xem console để biết chi tiết.");
+          }
+      } catch (err: any) {
+          throw err; // Re-throw to be caught in handleSubmit
+      }
   };
 
   // 2. Upload to Google Apps Script
@@ -200,7 +207,7 @@ const Upload: React.FC = () => {
           base64: base64Data,
           mimeType: file.type,
           filename: file.name,
-          folderName: folderName // Tên folder con (Tên truyện)
+          folderName: folderName 
       };
 
       try {
@@ -215,12 +222,7 @@ const Upload: React.FC = () => {
         const data = await res.json();
         if (!data.success) throw new Error(data.message || "Lỗi tải lên GAS");
         
-        // FIX: Xử lý link ảnh Google Drive để hiển thị tốt hơn
-        // Link gốc: https://drive.google.com/uc?export=view&id=XXX
-        // Link mới: https://lh3.googleusercontent.com/d/XXX
         let directUrl = data.url;
-        
-        // Tìm ID trong URL (thường là chuỗi dài > 25 ký tự)
         const idMatch = directUrl.match(/[\w-]{25,}/); 
         if (idMatch) {
              directUrl = `https://lh3.googleusercontent.com/d/${idMatch[0]}`;
@@ -260,17 +262,19 @@ const Upload: React.FC = () => {
           return;
       }
 
+      const isLinkMode = storageType === 'canva' || storageType === 'drive_folder';
+
       // --- VALIDATION ---
       if (mode === 'new') {
           if (!title) {
               alert("Vui lòng nhập tên truyện!");
               return;
           }
-          if (storageType !== 'canva' && !coverFile) {
+          if (!isLinkMode && !coverFile) {
               alert("Vui lòng chọn ảnh bìa!");
               return;
           }
-          if (storageType === 'canva' && !canvaCoverUrl.trim()) {
+          if (isLinkMode && !canvaCoverUrl.trim()) {
               alert("Vui lòng nhập link ảnh bìa!");
               return;
           }
@@ -282,7 +286,7 @@ const Upload: React.FC = () => {
       }
 
       // Validate Chapter Content
-      if (storageType === 'canva') {
+      if (isLinkMode) {
           if (!canvaChapterUrls.trim()) {
               alert("Vui lòng nhập danh sách link ảnh chapter!");
               return;
@@ -305,9 +309,6 @@ const Upload: React.FC = () => {
         
         let coverUrl = '';
         
-        // XÁC ĐỊNH TÊN FOLDER CON CHO GOOGLE DRIVE
-        // Nếu là truyện mới: Dùng Title người dùng nhập
-        // Nếu là update: Tìm tên truyện từ ID đã chọn
         let targetFolderName = "Uncategorized";
         if (mode === 'new') {
             targetFolderName = title.trim();
@@ -317,14 +318,13 @@ const Upload: React.FC = () => {
                 targetFolderName = existingStory.title.trim();
             }
         }
-        
-        // Loại bỏ các ký tự đặc biệt để tránh lỗi tên folder (tùy chọn, Drive khá thoải mái)
         targetFolderName = targetFolderName.replace(/[/\\]/g, "-");
 
         // --- 1. PROCESS COVER ---
         if (mode === 'new') {
-            if (storageType === 'canva') {
-                coverUrl = canvaCoverUrl.trim();
+            if (isLinkMode) {
+                // Auto convert cover link if it's drive
+                coverUrl = convertDriveLink(canvaCoverUrl.trim());
             } else if (coverFile) {
                 setUploadStatus('Đang tải lên ảnh bìa...');
                 if (storageType === 'server') {
@@ -343,15 +343,14 @@ const Upload: React.FC = () => {
         // --- 2. PROCESS CHAPTER IMAGES ---
         let imageUrls: string[] = [];
         
-        if (storageType === 'canva') {
-            // Process text area urls
+        if (isLinkMode) {
             imageUrls = canvaChapterUrls.split('\n')
                 .map(url => url.trim())
-                .filter(url => url !== '');
+                .filter(url => url !== '')
+                .map(url => convertDriveLink(url)); // Apply conversion logic for Drive links
             
             if (imageUrls.length === 0) throw new Error("Không tìm thấy link ảnh hợp lệ.");
         } else {
-            // Process file uploads
             if (chapterFiles) {
                 for (let i = 0; i < chapterFiles.length; i++) {
                     setUploadStatus(`Đang tải ảnh ${i + 1}/${chapterFiles.length} lên ${storageType === 'drive' ? 'Google Drive' : 'Host'}...`);
@@ -450,34 +449,33 @@ const Upload: React.FC = () => {
             clearTimeout(timeoutId);
 
             if (saveRes.status === 404) {
-                 throw new Error("Không tìm thấy file api.php trên Host. Vui lòng tải JSON và upload thủ công.");
+                 throw new Error("Không tìm thấy file api.php trên Host. Vui lòng kiểm tra xem bạn đã upload file api.php chưa.");
             }
             
-            if (!saveRes.ok) throw new Error("Server Error: " + saveRes.status);
+            if (!saveRes.ok) throw new Error("Lỗi Server (HTTP " + saveRes.status + ")");
             
             const text = await saveRes.text();
             try { 
                 const saveData = JSON.parse(text); 
                 if (!saveData.success) throw new Error(saveData.message);
             } catch(e) { 
-                console.warn("Non-JSON response from server:", text);
+                console.warn("Server trả về không phải JSON:", text);
+                throw new Error("Server phản hồi không đúng định dạng JSON. Có thể do lỗi PHP.");
             }
 
         } catch (serverErr: any) {
              console.error("Server save failed", serverErr);
-             throw new Error("Lỗi lưu vào Host: " + serverErr.message);
+             throw new Error("Lỗi lưu dữ liệu: " + serverErr.message);
         }
 
         setUploadStatus('Hoàn tất!');
-        alert("Đăng truyện thành công! Ảnh đã được lưu vào folder truyện trên Drive.");
+        alert("Đăng truyện thành công!");
         await refreshStories(); 
         navigate('/');
 
       } catch (error: any) {
         console.error("Upload Error:", error);
         setUploadStatus('Lỗi: ' + error.message);
-        
-        // Show fallback UI
         setShowManualSave(true);
         setIsSubmitting(false);
       } 
@@ -520,65 +518,61 @@ const Upload: React.FC = () => {
             {/* Storage Type (Images) */}
             <div>
                 <h3 className="font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-2 text-sm uppercase tracking-wide opacity-80">
-                    <ImageIcon size={16} /> Nơi lưu ảnh
+                    <ImageIcon size={16} /> Phương thức upload
                 </h3>
                 
                 {/* Method Buttons */}
-                <div className="flex flex-col sm:flex-row gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {uploadSettings.allowServer && (
                         <button 
                             onClick={() => setStorageType('server')}
-                            className={`flex-1 py-2 rounded-lg text-sm font-bold border transition-colors flex items-center justify-center gap-2 ${storageType === 'server' ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300' : 'border-slate-200 dark:border-slate-700 text-slate-500'}`}
+                            className={`py-2 px-2 rounded-lg text-xs md:text-sm font-bold border transition-colors flex items-center justify-center gap-1 md:gap-2 ${storageType === 'server' ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300' : 'border-slate-200 dark:border-slate-700 text-slate-500'}`}
                         >
-                            <Server size={16} /> Host (Free)
+                            <Server size={14} /> Host (Free)
                         </button>
                     )}
                     {uploadSettings.allowDrive && (
                         <button 
                             onClick={() => setStorageType('drive')}
-                            className={`flex-1 py-2 rounded-lg text-sm font-bold border transition-colors flex items-center justify-center gap-2 ${storageType === 'drive' ? 'bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300' : 'border-slate-200 dark:border-slate-700 text-slate-500'}`}
+                            className={`py-2 px-2 rounded-lg text-xs md:text-sm font-bold border transition-colors flex items-center justify-center gap-1 md:gap-2 ${storageType === 'drive' ? 'bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300' : 'border-slate-200 dark:border-slate-700 text-slate-500'}`}
                         >
-                            <Cloud size={16} /> Google Drive
+                            <Cloud size={14} /> Drive (Script)
+                        </button>
+                    )}
+                    {uploadSettings.allowDriveFolder && (
+                         <button 
+                            onClick={() => setStorageType('drive_folder')}
+                            className={`py-2 px-2 rounded-lg text-xs md:text-sm font-bold border transition-colors flex items-center justify-center gap-1 md:gap-2 ${storageType === 'drive_folder' ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300' : 'border-slate-200 dark:border-slate-700 text-slate-500'}`}
+                        >
+                            <FolderOpen size={14} /> Drive (Link)
                         </button>
                     )}
                     {uploadSettings.allowCanva && (
                         <button 
                             onClick={() => setStorageType('canva')}
-                            className={`flex-1 py-2 rounded-lg text-sm font-bold border transition-colors flex items-center justify-center gap-2 ${storageType === 'canva' ? 'bg-purple-50 dark:bg-purple-900/30 border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300' : 'border-slate-200 dark:border-slate-700 text-slate-500'}`}
+                            className={`py-2 px-2 rounded-lg text-xs md:text-sm font-bold border transition-colors flex items-center justify-center gap-1 md:gap-2 ${storageType === 'canva' ? 'bg-purple-50 dark:bg-purple-900/30 border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300' : 'border-slate-200 dark:border-slate-700 text-slate-500'}`}
                         >
-                            <Palette size={16} /> Canva / Link
+                            <Palette size={14} /> Canva/Link
                         </button>
-                    )}
-                    {!uploadSettings.allowServer && !uploadSettings.allowDrive && !uploadSettings.allowCanva && (
-                         <div className="w-full text-center text-red-500 py-2 border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-900/20 rounded-lg text-sm font-bold">
-                             Hệ thống upload đang bảo trì. Vui lòng quay lại sau.
-                         </div>
                     )}
                 </div>
             </div>
-
-            {storageType === 'drive' && (
-                <div className="p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg flex items-center gap-2 animate-in fade-in zoom-in-95">
-                    <CheckCircle size={18} className="text-green-600 dark:text-green-400" />
-                    <span className="text-sm text-green-800 dark:text-green-200 font-medium">
-                        Ảnh sẽ được lưu vào thư mục <b>truyennhafurry / [Tên Truyện]</b> trên Drive.
-                    </span>
-                </div>
-            )}
-             {storageType === 'canva' && (
-                <div className="p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg flex items-center gap-2 animate-in fade-in zoom-in-95">
-                    <LinkIcon size={18} className="text-purple-600 dark:text-purple-400" />
-                    <span className="text-sm text-purple-800 dark:text-purple-200 font-medium">
-                        Chế độ nhập link trực tiếp. Bạn chỉ cần dán URL ảnh (từ Canva, Imgur, Facebook...).
-                    </span>
-                </div>
-            )}
-            {storageType === 'server' && (
-                <div className="p-3 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg flex items-center gap-2 animate-in fade-in zoom-in-95">
-                    <Server size={18} className="text-indigo-600 dark:text-indigo-400" />
-                    <span className="text-sm text-indigo-800 dark:text-indigo-200 font-medium">
-                        Lưu trữ trực tiếp trên Host. Nhanh và ổn định cho ảnh nhẹ.
-                    </span>
+            
+            {/* Storage Info Messages */}
+             {storageType === 'drive_folder' && (
+                <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg flex flex-col gap-2 animate-in fade-in zoom-in-95">
+                    <div className="flex items-start gap-2">
+                        <AlertTriangle size={18} className="text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+                        <span className="text-sm text-yellow-800 dark:text-yellow-200 font-medium">
+                            LƯU Ý QUAN TRỌNG:
+                        </span>
+                    </div>
+                    <ul className="list-disc list-inside text-sm text-yellow-700 dark:text-yellow-300 ml-6 space-y-1">
+                        <li>Google Drive không cho phép lấy link trực tiếp từ thư mục (Folder).</li>
+                        <li>Bạn hãy vào thư mục, <b>chọn tất cả ảnh</b> (Ctrl+A).</li>
+                        <li>Chuột phải chọn <b>Share (Chia sẻ)</b> {'>'} <b>Copy Link (Sao chép liên kết)</b>.</li>
+                        <li>Dán danh sách link đó vào khung bên dưới. Hệ thống sẽ tự xử lý.</li>
+                    </ul>
                 </div>
             )}
         </div>
@@ -682,16 +676,16 @@ const Upload: React.FC = () => {
                     <div>
                         <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Ảnh bìa <span className="text-red-500">*</span></label>
                         
-                        {storageType === 'canva' ? (
+                        {storageType === 'canva' || storageType === 'drive_folder' ? (
                              <div className="flex gap-2 items-center">
                                 <input 
                                     type="text" 
                                     className="flex-grow px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 dark:text-white"
-                                    placeholder="Dán link ảnh bìa vào đây (https://...)"
+                                    placeholder={storageType === 'drive_folder' ? "Dán link ảnh bìa Drive (View link đều được)" : "Dán link ảnh bìa vào đây (https://...)"}
                                     value={canvaCoverUrl}
                                     onChange={(e) => {
                                         setCanvaCoverUrl(e.target.value);
-                                        setCoverPreview(e.target.value);
+                                        setCoverPreview(storageType === 'drive_folder' ? convertDriveLink(e.target.value) : e.target.value);
                                     }}
                                 />
                                 {coverPreview && <img src={coverPreview} alt="Preview" className="w-12 h-16 object-cover rounded shadow-sm flex-shrink-0 bg-slate-200" onError={(e) => (e.target as HTMLImageElement).style.display = 'none'} />}
@@ -704,6 +698,9 @@ const Upload: React.FC = () => {
                                 </label>
                                 {coverPreview && <img src={coverPreview} alt="Preview" className="w-12 h-16 object-cover rounded shadow-sm" />}
                             </div>
+                        )}
+                        {storageType === 'drive_folder' && (
+                             <p className="text-xs text-slate-400 mt-1">Hệ thống sẽ tự động chuyển đổi link Drive "View" sang link trực tiếp.</p>
                         )}
                     </div>
 
@@ -725,7 +722,7 @@ const Upload: React.FC = () => {
                         </select>
                     </div>
                     
-                    {/* NÚT XÓA TRUYỆN (Chỉ hiển thị khi đã chọn truyện và là chủ sở hữu) */}
+                    {/* NÚT XÓA TRUYỆN */}
                     {selectedStoryId && (() => {
                         const s = stories.find(st => st.id === selectedStoryId);
                         const isOwner = user && s && (user.id === s.uploaderId || user.name === s.translator || user.role === 'admin');
@@ -769,17 +766,26 @@ const Upload: React.FC = () => {
                 
                 <div>
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                        {storageType === 'canva' ? 'Link ảnh (Mỗi dòng 1 link)' : 'Trang truyện'} <span className="text-red-500">*</span>
+                        {storageType === 'canva' || storageType === 'drive_folder' ? 'Danh sách link ảnh (Mỗi dòng 1 link)' : 'Trang truyện'} <span className="text-red-500">*</span>
                     </label>
                     
-                    {storageType === 'canva' ? (
-                        <textarea 
-                            rows={8}
-                            className="w-full px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 dark:text-white font-mono text-sm"
-                            placeholder="https://my-canva-image-1.jpg&#10;https://my-canva-image-2.jpg&#10;..."
-                            value={canvaChapterUrls}
-                            onChange={(e) => setCanvaChapterUrls(e.target.value)}
-                        />
+                    {storageType === 'canva' || storageType === 'drive_folder' ? (
+                        <>
+                            <textarea 
+                                rows={8}
+                                className="w-full px-4 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 dark:text-white font-mono text-sm"
+                                placeholder={storageType === 'drive_folder' 
+                                    ? "https://drive.google.com/file/d/1...\nhttps://drive.google.com/file/d/2...\n(Paste toàn bộ link ảnh bạn đã copy vào đây)" 
+                                    : "https://my-canva-image-1.jpg\nhttps://my-canva-image-2.jpg\n..."}
+                                value={canvaChapterUrls}
+                                onChange={(e) => setCanvaChapterUrls(e.target.value)}
+                            />
+                            {storageType === 'drive_folder' && (
+                                <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium flex items-center gap-1">
+                                    <HelpCircle size={12} /> Hướng dẫn: Vào thư mục Drive {'>'} Chọn tất cả ảnh (Ctrl+A) {'>'} Chuột phải {'>'} Share {'>'} Copy Link.
+                                </p>
+                            )}
+                        </>
                     ) : (
                         <div className={`relative group p-8 border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900/50 ${!storageType ? 'opacity-50 cursor-not-allowed' : ''}`}>
                             <input type="file" multiple accept="image/*" onChange={handleChapterPagesChange} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" disabled={!storageType} />

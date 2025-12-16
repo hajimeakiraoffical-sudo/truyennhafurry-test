@@ -69,4 +69,5 @@ export interface UploadSettings {
   allowServer: boolean;
   allowDrive: boolean;
   allowCanva: boolean;
+  allowDriveFolder: boolean; // New: Option for Drive Folder Links
 }

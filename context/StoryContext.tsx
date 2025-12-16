@@ -36,7 +36,8 @@ export const StoryProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [uploadSettings, setUploadSettings] = useState<UploadSettings>({
       allowServer: true,
       allowDrive: true,
-      allowCanva: true
+      allowCanva: true,
+      allowDriveFolder: true
   });
   const [genres, setGenres] = useState<string[]>(DEFAULT_GENRES);
   const [loading, setLoading] = useState(true);

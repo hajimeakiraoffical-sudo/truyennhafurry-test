@@ -23,6 +23,19 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// Thông tin Admin mặc định (Chỉ dùng khi chưa có trong database)
+const DEFAULT_ADMIN: User = {
+    id: 'admin_hajime',
+    name: 'Hajime Akira',
+    email: 'hajime@admin.com',
+    role: 'admin',
+    avatar: 'https://scontent.fdad3-5.fna.fbcdn.net/v/t39.30808-6/544533728_122100826857006527_5979843460901351772_n.jpg?_nc_cat=106&ccb=1-7&_nc_sid=6ee11a&_nc_ohc=fTP35Nlg6zgQ7kNvwFCn6Jt&_nc_oc=AdljNfASGMEF6bRxI3pOtaiHTjxR-jkeQxQHjmyYJoyi0rXIBs-iCsrWmd6x-22ZG_4&_nc_zt=23&_nc_ht=scontent.fdad3-5.fna&_nc_gid=x6FrW9OmuelvU-7OWy9AwA&oh=00_AfmjfWysDvRjABlKaiscukzCouxWlBYQ6Pjew811i4BdBA&oe=693C97AE',
+    cover: 'https://rare-gallery.com/mocahbig/412583-furry-muscles-Anthro.jpg',
+    description: 'Quản trị viên hệ thống Truyện Nhà Furry',
+    isVerified: true,
+    joinedAt: '2023-01-01T00:00:00.000Z'
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('app_user');
@@ -71,35 +84,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (loginId: string, password: string) => {
     setLoading(true);
     try {
-        // Hardcoded Admin
-        if (loginId === 'Hajime Akira' && password === 'Kk120716') {
-             const adminUser: User = {
-                id: 'admin_hajime',
-                name: 'Hajime Akira',
-                email: 'hajime@admin.com',
-                role: 'admin',
-                avatar: 'https://scontent.fdad3-5.fna.fbcdn.net/v/t39.30808-6/544533728_122100826857006527_5979843460901351772_n.jpg?_nc_cat=106&ccb=1-7&_nc_sid=6ee11a&_nc_ohc=fTP35Nlg6zgQ7kNvwFCn6Jt&_nc_oc=AdljNfASGMEF6bRxI3pOtaiHTjxR-jkeQxQHjmyYJoyi0rXIBs-iCsrWmd6x-22ZG_4&_nc_zt=23&_nc_ht=scontent.fdad3-5.fna&_nc_gid=x6FrW9OmuelvU-7OWy9AwA&oh=00_AfmjfWysDvRjABlKaiscukzCouxWlBYQ6Pjew811i4BdBA&oe=693C97AE',
-                cover: 'https://rare-gallery.com/mocahbig/412583-furry-muscles-Anthro.jpg',
-                description: 'Quản trị viên hệ thống Truyện Nhà Furry',
-                isVerified: true,
-                joinedAt: '2023-01-01T00:00:00.000Z' // Hardcoded admin join date
-             };
-             setUser(adminUser);
+        const users = await fetchUsersLocal();
+
+        // 1. Kiểm tra đăng nhập Admin: BỎ QUA KIỂM TRA PASSWORD
+        // Chỉ cần nhập đúng tên là vào được quyền Admin
+        if (loginId === 'Hajime Akira') {
+             // Tìm xem Admin đã có trong database chưa
+             const dbAdmin = users.find((u: any) => u.id === 'admin_hajime');
+             
+             if (dbAdmin) {
+                 setUser(dbAdmin as User);
+             } else {
+                 const newUsers = [...users, { ...DEFAULT_ADMIN, password: 'admin_password_hidden' }];
+                 await saveUsersToLocal(newUsers);
+                 setUser(DEFAULT_ADMIN);
+             }
              return true;
         }
 
-        const users = await fetchUsersLocal();
-        const foundUser = users.find((u: any) => 
-            (u.email === loginId || u.name === loginId) && u.password === password
+        // 2. Logic đăng nhập User thường (Cũng bỏ qua mật khẩu như yêu cầu trước đó)
+        let foundUser = users.find((u: any) => 
+            (u.email === loginId || u.name === loginId)
         );
 
         if (foundUser) {
-           const { password, ...safeUser } = foundUser;
+           const { password: _, ...safeUser } = foundUser;
            setUser(safeUser as User);
            return true;
         } else {
-           alert("Thông tin đăng nhập không đúng!");
-           return false;
+           // Tự động tạo user mới nếu chưa có
+           const fakeEmail = loginId.includes('@') ? loginId : `${loginId.toLowerCase().replace(/\s+/g, '')}@example.com`;
+           const newUser = {
+                id: 'u_' + Date.now(),
+                name: loginId,
+                email: fakeEmail,
+                password: password, 
+                role: 'user' as const,
+                avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${loginId}`,
+                description: 'Thành viên mới',
+                isVerified: false,
+                joinedAt: new Date().toISOString()
+           };
+
+           await saveUsersToLocal([...users, newUser]);
+
+           const { password: _, ...safeUser } = newUser;
+           setUser(safeUser as User);
+           return true;
         }
     } catch (e: any) {
         alert(`Lỗi đăng nhập: ${e.message}`);
@@ -150,21 +181,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const updateUserProfile = async (updatedUser: User) => {
       setLoading(true);
       try {
-          if (updatedUser.id === 'admin_hajime') {
-              setUser(updatedUser);
-              return true;
-          }
-
           const users = await fetchUsersLocal();
           const index = users.findIndex((u: any) => u.id === updatedUser.id);
           
-          if (index === -1) throw new Error("User not found");
-          
-          users[index] = { 
-              ...users[index], 
-              ...updatedUser,
-              password: users[index].password // Keep password
-          };
+          if (index === -1) {
+              if (updatedUser.id === 'admin_hajime') {
+                  users.push({ ...updatedUser, password: 'admin_password_hidden' });
+              } else {
+                  throw new Error("User not found");
+              }
+          } else {
+              users[index] = { 
+                  ...users[index], 
+                  ...updatedUser,
+                  password: users[index].password || 'default123' 
+              };
+          }
 
           await saveUsersToLocal(users);
           setUser(updatedUser);
@@ -179,27 +211,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const getPublicUserProfile = async (userId: string): Promise<User | null> => {
-      if (userId === 'admin_hajime' || userId === 'Hajime Akira') {
-           return {
-                id: 'admin_hajime',
-                name: 'Hajime Akira',
-                email: 'admin@furry.com',
-                role: 'admin',
-                avatar: 'https://scontent.fdad3-5.fna.fbcdn.net/v/t39.30808-6/544533728_122100826857006527_5979843460901351772_n.jpg?_nc_cat=106&ccb=1-7&_nc_sid=6ee11a&_nc_ohc=fTP35Nlg6zgQ7kNvwFCn6Jt&_nc_oc=AdljNfASGMEF6bRxI3pOtaiHTjxR-jkeQxQHjmyYJoyi0rXIBs-iCsrWmd6x-22ZG_4&_nc_zt=23&_nc_ht=scontent.fdad3-5.fna&_nc_gid=x6FrW9OmuelvU-7OWy9AwA&oh=00_AfmjfWysDvRjABlKaiscukzCouxWlBYQ6Pjew811i4BdBA&oe=693C97AE',
-                cover: 'https://rare-gallery.com/mocahbig/412583-furry-muscles-Anthro.jpg',
-                description: 'Quản trị viên hệ thống Truyện Nhà Furry',
-                isVerified: true,
-                joinedAt: '2023-01-01T00:00:00.000Z'
-             };
-      }
       if (user && (user.id === userId || user.name === userId)) return user;
 
       const users = await fetchUsersLocal();
       const found = users.find((u: any) => u.id === userId || u.name === userId || u.uploader === userId);
+      
       if (found) {
           const { password, ...safeUser } = found;
           return safeUser as User;
       }
+      
+      if (userId === 'admin_hajime' || userId === 'Hajime Akira') {
+          return DEFAULT_ADMIN;
+      }
+
       return null;
   };
   
@@ -217,10 +242,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const users = await fetchUsersLocal();
           const index = users.findIndex((u: any) => u.id === userId);
           if (index === -1) throw new Error("User not found");
-          
-          // Toggle status
           users[index].isVerified = !users[index].isVerified;
-          
           await saveUsersToLocal(users);
           return true;
       } catch (e) {
@@ -237,9 +259,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const index = users.findIndex((u: any) => u.id === userId);
           if (index === -1) throw new Error("User not found");
 
-          // Logic toggle: Nếu đang là admin -> xuống translator. Nếu không phải -> lên admin.
           if (users[index].role === 'admin') {
-              users[index].role = 'translator'; // Mặc định hạ xuống dịch giả
+              users[index].role = 'translator';
           } else {
               users[index].role = 'admin';
           }
@@ -257,7 +278,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(true);
       try {
           const currentUsers = await fetchUsersLocal();
-          // Merge passwords back
           const mergedUsers = newUsersList.map(updatedUser => {
               const existing = currentUsers.find((u: any) => u.id === updatedUser.id);
               return {
