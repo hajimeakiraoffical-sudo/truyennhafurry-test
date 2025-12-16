@@ -6,10 +6,10 @@ export const GITHUB_CONFIG = {
   TOKEN: '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',
 
   // Tên tài khoản GitHub (Sẽ được ghi đè tự động bởi logic phát hiện user, nhưng để mặc định là auto-detect)
-  USERNAME: 'auto-detect', 
+  USERNAME: 'hajimeakiraoffical-sudo', 
   
   // Tên Repository của bạn
-  REPO_NAME: 'truyen-nha-furry',
+  REPO_NAME: 'truyennhafurry-test',
   
   // Nhánh chính
   BRANCH: 'main',

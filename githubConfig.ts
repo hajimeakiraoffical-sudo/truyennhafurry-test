@@ -8,10 +8,10 @@ export const GITHUB_CONFIG = {
 
   // HÃY SỬA DÒNG NÀY: Điền tên tài khoản GitHub của bạn (Ví dụ: 'nguyenvana')
   // Nếu để 'auto-detect', hệ thống sẽ tự dò nhưng có thể bị lỗi mạng.
-  USERNAME: 'auto-detect', 
+  USERNAME: 'hajimeakiraoffical-sudo', 
   
   // Tên Repository chứa truyện
-  REPO_NAME: 'truyen-nha-furry',
+  REPO_NAME: 'truyennhafurry-test',
   
   // Nhánh chính (main hoặc master)
   BRANCH: 'main',
