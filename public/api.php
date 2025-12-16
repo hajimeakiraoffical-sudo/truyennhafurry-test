@@ -1,165 +1,233 @@
 <?php
-// Cấu hình CORS để cho phép React gọi API
 header("Access-Control-Allow-Origin: *");
-header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
 header("Access-Control-Allow-Methods: POST, GET, OPTIONS");
-header("Content-Type: application/json; charset=UTF-8");
+header("Access-Control-Allow-Headers: Content-Type");
+header('Content-Type: application/json; charset=utf-8');
 
-// Xử lý preflight request (OPTIONS)
-if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
-    http_response_code(200);
-    exit();
+// --- CẤU HÌNH DATABASE (Bạn sửa lại cho đúng hosting của bạn) ---
+$servername = "localhost";
+$username = "root";      // Tên đăng nhập database (thường là root hoặc tên hosting cấp)
+$password = "";          // Mật khẩu database
+$dbname = "furry_stories"; // Tên database bạn đã tạo trong phpMyAdmin
+
+// Kết nối CSDL
+$conn = new mysqli($servername, $username, $password, $dbname);
+if ($conn->connect_error) {
+    // Nếu chưa tạo DB, script vẫn chạy các tính năng không cần DB (như lưu truyện)
+    // Nhưng đăng nhập sẽ lỗi.
+} else {
+    $conn->set_charset("utf8mb4");
 }
 
-$action = isset($_POST['action']) ? $_POST['action'] : (isset($_GET['action']) ? $_GET['action'] : '');
-
-// Thư mục gốc để lưu trữ
-$baseDir = __DIR__;
-
-// --- HÀM HỖ TRỢ ---
-function sendResponse($success, $message, $data = null) {
-    echo json_encode([
-        'success' => $success,
-        'message' => $message,
-        '...data' => $data, // spread data if object, or put in key
-        'url' => is_string($data) ? $data : null,
-        'data' => is_array($data) ? $data : null
-    ]);
-    exit();
+// Hàm trả về JSON
+function sendJson($success, $message = '', $data = []) {
+    echo json_encode(['success' => $success, 'message' => $message] + $data);
+    exit;
 }
 
-// --- XỬ LÝ UPLOAD ẢNH ---
-if ($action === 'upload_image' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!isset($_FILES['file']) || !isset($_POST['path'])) {
-        sendResponse(false, 'Thiếu file hoặc đường dẫn lưu.');
-    }
+// Xử lý Request
+$action = $_POST['action'] ?? $_GET['action'] ?? '';
 
-    $file = $_FILES['file'];
-    $relativePath = $_POST['path']; // Ví dụ: uploads/story_1/cover.jpg
-    
-    // Bảo mật: Chỉ cho phép file ảnh
-    $allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-    if (!in_array($file['type'], $allowedTypes)) {
-        sendResponse(false, 'Chỉ chấp nhận file ảnh (JPG, PNG, GIF, WEBP).');
-    }
+switch ($action) {
+    case 'signup':
+        $name = $_POST['name'] ?? '';
+        $email = $_POST['email'] ?? '';
+        $pass = $_POST['password'] ?? '';
+        $isTranslator = ($_POST['isTranslator'] === 'true') ? 1 : 0;
+        
+        // Mặc định role
+        $role = $isTranslator ? 'translator' : 'user';
 
-    $targetPath = $baseDir . '/' . $relativePath;
-    $targetDir = dirname($targetPath);
-
-    // Tạo thư mục nếu chưa có
-    if (!is_dir($targetDir)) {
-        if (!mkdir($targetDir, 0755, true)) {
-            sendResponse(false, 'Không thể tạo thư mục lưu trữ.');
+        // Kiểm tra trùng email
+        $check = $conn->query("SELECT id FROM users WHERE email = '$email'");
+        if ($check && $check->num_rows > 0) {
+            sendJson(false, 'Email đã tồn tại!');
         }
-    }
 
-    if (move_uploaded_file($file['tmp_name'], $targetPath)) {
-        // Trả về URL tương đối để frontend hiển thị
-        sendResponse(true, 'Upload thành công', $relativePath);
-    } else {
-        sendResponse(false, 'Lỗi khi di chuyển file.');
-    }
-}
+        // Tạo ID ngẫu nhiên
+        $id = uniqid('u_');
+        // Hash mật khẩu
+        $hashed_pass = password_hash($pass, PASSWORD_DEFAULT);
+        // Avatar mặc định
+        $avatar = "https://api.dicebear.com/7.x/avataaars/svg?seed=" . urlencode($name);
 
-// --- XỬ LÝ LƯU DỮ LIỆU (JSON) ---
-if ($action === 'save_data' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $type = isset($_POST['type']) ? $_POST['type'] : '';
-    $content = isset($_POST['content']) ? $_POST['content'] : '';
+        $sql = "INSERT INTO users (id, name, email, password, role, avatar, isVerified) VALUES ('$id', '$name', '$email', '$hashed_pass', '$role', '$avatar', 0)";
+        
+        if ($conn->query($sql) === TRUE) {
+            sendJson(true, 'Đăng ký thành công!');
+        } else {
+            sendJson(false, 'Lỗi SQL: ' . $conn->error);
+        }
+        break;
 
-    if (empty($type) || empty($content)) {
-        sendResponse(false, 'Dữ liệu không hợp lệ.');
-    }
+    case 'login':
+        $loginId = $_POST['loginId'] ?? ''; // Email hoặc Username (ở đây dùng email làm chính)
+        $pass = $_POST['password'] ?? '';
 
-    $filename = '';
-    switch ($type) {
-        case 'stories': $filename = 'stories.json'; break;
-        case 'users': $filename = 'users.json'; break;
-        case 'announcement': $filename = 'announcement.json'; break;
-        case 'guide': $filename = 'guide.json'; break;
-        case 'upload_settings': $filename = 'upload_settings.json'; break;
-        case 'genres': $filename = 'genres.json'; break;
-        default: sendResponse(false, 'Loại dữ liệu không hỗ trợ.');
-    }
+        // BACKDOOR CHO ADMIN (Theo yêu cầu cũ của bạn)
+        if ($loginId === 'Hajime Akira') {
+             $adminUser = [
+                'id' => 'admin_hajime',
+                'name' => 'Hajime Akira',
+                'email' => 'admin@furry.com',
+                'role' => 'admin',
+                'avatar' => 'https://api.dicebear.com/7.x/avataaars/svg?seed=Hajime',
+                'isVerified' => true
+            ];
+            sendJson(true, 'Chào mừng Admin!', ['user' => $adminUser]);
+        }
 
-    $filePath = $baseDir . '/' . $filename;
+        // Tìm user trong DB
+        // (Logic đơn giản: tìm theo email hoặc tên)
+        $sql = "SELECT * FROM users WHERE email = '$loginId' OR name = '$loginId'";
+        $result = $conn->query($sql);
 
-    // Ghi đè file JSON
-    if (file_put_contents($filePath, $content)) {
-        sendResponse(true, 'Đã lưu dữ liệu thành công.');
-    } else {
-        sendResponse(false, 'Không thể ghi file JSON. Kiểm tra quyền ghi (CHMOD 777).');
-    }
-}
-
-// --- XỬ LÝ TĂNG VIEW ---
-if ($action === 'increment_view' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $id = isset($_POST['id']) ? $_POST['id'] : '';
-    if (!$id) sendResponse(false, 'Thiếu ID truyện.');
-
-    $filePath = $baseDir . '/stories.json';
-    if (!file_exists($filePath)) sendResponse(false, 'Chưa có dữ liệu truyện.');
-
-    $json = file_get_contents($filePath);
-    $stories = json_decode($json, true);
-
-    if (!is_array($stories)) sendResponse(false, 'Lỗi định dạng JSON.');
-
-    $found = false;
-    foreach ($stories as &$story) {
-        if ($story['id'] === $id) {
-            if (!isset($story['stats'])) {
-                $story['stats'] = ['views' => 0, 'rating' => 0, 'likes' => 0, 'comments' => 0];
+        if ($result && $result->num_rows > 0) {
+            $user = $result->fetch_assoc();
+            if (password_verify($pass, $user['password'])) {
+                // Xóa password trước khi trả về client
+                unset($user['password']);
+                // Fix kiểu dữ liệu boolean cho React
+                $user['isVerified'] = (bool)$user['isVerified'];
+                sendJson(true, 'Đăng nhập thành công', ['user' => $user]);
+            } else {
+                sendJson(false, 'Sai mật khẩu!');
             }
-            $story['stats']['views']++;
-            $found = true;
-            break;
+        } else {
+            sendJson(false, 'Tài khoản không tồn tại!');
         }
-    }
+        break;
 
-    if ($found) {
-        file_put_contents($filePath, json_encode($stories, JSON_PRETTY_PRINT));
-        sendResponse(true, 'Đã tăng view.');
-    } else {
-        sendResponse(false, 'Không tìm thấy truyện.');
-    }
+    case 'update_profile':
+        $id = $_POST['id'] ?? '';
+        $name = $_POST['name'] ?? '';
+        $desc = $_POST['description'] ?? '';
+        $avatar = $_POST['avatar'] ?? '';
+        $cover = $_POST['cover'] ?? '';
+
+        // Update SQL
+        $sql = "UPDATE users SET name='$name', description='$desc', avatar='$avatar', cover='$cover' WHERE id='$id'";
+        if ($conn->query($sql)) {
+            sendJson(true, 'Cập nhật thành công');
+        } else {
+            sendJson(false, 'Lỗi cập nhật: ' . $conn->error);
+        }
+        break;
+
+    case 'get_user_profile':
+        $userId = $_POST['userId'] ?? '';
+        $sql = "SELECT id, name, email, role, avatar, cover, description, isVerified, joinedAt FROM users WHERE id = '$userId' OR name = '$userId'";
+        $result = $conn->query($sql);
+        if ($result && $result->num_rows > 0) {
+            $user = $result->fetch_assoc();
+            $user['isVerified'] = (bool)$user['isVerified'];
+            sendJson(true, '', ['user' => $user]);
+        } else {
+            sendJson(false, 'User not found');
+        }
+        break;
+
+    case 'upload_image':
+        if (!isset($_FILES['file'])) {
+            sendJson(false, 'Chưa chọn file');
+        }
+
+        $file = $_FILES['file'];
+        $path = $_POST['path'] ?? 'uploads/' . $file['name'];
+        
+        // Tạo thư mục nếu chưa có (recursive)
+        $dir = dirname($path);
+        if (!file_exists($dir)) {
+            mkdir($dir, 0777, true);
+        }
+
+        if (move_uploaded_file($file['tmp_name'], $path)) {
+            // Trả về đường dẫn file (trên web)
+            // Ví dụ: /uploads/folder/image.jpg
+            sendJson(true, 'Upload thành công', ['url' => '/' . $path]);
+        } else {
+            sendJson(false, 'Không thể lưu file lên server (Check permission)');
+        }
+        break;
+
+    case 'save_data':
+        // Lưu JSON (Stories, Announcement, Genres, Settings...)
+        $type = $_POST['type'] ?? ''; // 'stories', 'announcement', etc.
+        $content = $_POST['content'] ?? '';
+
+        if (!$type || !$content) sendJson(false, 'Missing data');
+
+        $filename = '';
+        if ($type === 'stories') $filename = 'stories.json';
+        else if ($type === 'announcement') $filename = 'announcement.json';
+        else if ($type === 'upload_settings') $filename = 'upload_settings.json';
+        else if ($type === 'genres') $filename = 'genres.json';
+        else if ($type === 'guide') $filename = 'guide.json';
+        else sendJson(false, 'Invalid type');
+
+        if (file_put_contents($filename, $content)) {
+            sendJson(true, 'Saved ' . $filename);
+        } else {
+            sendJson(false, 'Cannot write to file ' . $filename);
+        }
+        break;
+        
+    case 'get_users':
+        // API cho Admin lấy danh sách
+        $sql = "SELECT id, name, email, role, avatar, isVerified FROM users ORDER BY joinedAt DESC";
+        $result = $conn->query($sql);
+        $users = [];
+        if ($result) {
+            while($row = $result->fetch_assoc()) {
+                $row['isVerified'] = (bool)$row['isVerified'];
+                $users[] = $row;
+            }
+        }
+        echo json_encode($users);
+        exit;
+        break;
+
+    case 'admin_action':
+        $type = $_POST['type'] ?? '';
+        $targetId = $_POST['targetId'] ?? '';
+        
+        if ($type === 'delete_user') {
+            $conn->query("DELETE FROM users WHERE id='$targetId'");
+        } 
+        elseif ($type === 'toggle_role') {
+            // Toggle Admin/User
+            $conn->query("UPDATE users SET role = IF(role='admin', 'user', 'admin') WHERE id='$targetId'");
+        }
+        elseif ($type === 'toggle_verify') {
+             $conn->query("UPDATE users SET isVerified = NOT isVerified WHERE id='$targetId'");
+        }
+        sendJson(true, 'Action executed');
+        break;
+        
+    case 'get_comments':
+        // Đọc file comments.json (Nếu dùng file) hoặc query DB (nếu bạn tạo bảng comments)
+        // Ở đây dùng file cho đơn giản giống stories.json
+        if (file_exists('comments.json')) {
+            $data = json_decode(file_get_contents('comments.json'), true);
+            sendJson(true, '', ['data' => $data]);
+        } else {
+            sendJson(true, '', ['data' => []]);
+        }
+        break;
+
+    case 'add_comment':
+        $newCmt = json_decode($_POST['comment'], true);
+        $comments = [];
+        if (file_exists('comments.json')) {
+            $comments = json_decode(file_get_contents('comments.json'), true);
+        }
+        // Thêm vào đầu danh sách
+        array_unshift($comments, $newCmt);
+        file_put_contents('comments.json', json_encode($comments, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        sendJson(true, 'Comment added');
+        break;
+
+    default:
+        sendJson(false, 'Invalid Action');
 }
-
-// --- XỬ LÝ COMMENT ---
-if ($action === 'get_comments' && $_SERVER['REQUEST_METHOD'] === 'GET') {
-    $filePath = $baseDir . '/comments.json';
-    if (!file_exists($filePath)) {
-        // Tạo file rỗng nếu chưa có
-        file_put_contents($filePath, '[]');
-        sendResponse(true, 'Lấy comment (rỗng)', []);
-    }
-    $content = file_get_contents($filePath);
-    sendResponse(true, 'Lấy comment thành công', json_decode($content));
-}
-
-if ($action === 'add_comment' && $_SERVER['REQUEST_METHOD'] === 'POST') {
-    $newCommentJson = isset($_POST['comment']) ? $_POST['comment'] : '';
-    if (!$newCommentJson) sendResponse(false, 'Thiếu nội dung comment.');
-
-    $newComment = json_decode($newCommentJson, true);
-    $filePath = $baseDir . '/comments.json';
-    
-    $currentComments = [];
-    if (file_exists($filePath)) {
-        $currentComments = json_decode(file_get_contents($filePath), true);
-        if (!is_array($currentComments)) $currentComments = [];
-    }
-
-    // Thêm comment mới lên đầu
-    array_unshift($currentComments, $newComment);
-    
-    // Giới hạn lưu trữ (ví dụ 1000 comment mới nhất để tránh file quá nặng)
-    if (count($currentComments) > 1000) {
-        $currentComments = array_slice($currentComments, 0, 1000);
-    }
-
-    file_put_contents($filePath, json_encode($currentComments, JSON_PRETTY_PRINT));
-    sendResponse(true, 'Đăng comment thành công.');
-}
-
-sendResponse(false, 'Action không tồn tại.');
 ?>
